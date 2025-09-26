@@ -66,7 +66,7 @@ function getRequest(url) {
   zip = await jszip.loadAsync(data);
   data = null;
   console.log("Resetting build folder...");
-  
+
   if (fs.existsSync(buildFolder)) {
     fs.rmSync(buildFolder, { recursive: true, dir: true });
   }
@@ -96,6 +96,4 @@ function getRequest(url) {
   }
 
   console.log("Done");
-
-  process.exit();
 })();
