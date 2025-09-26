@@ -1,128 +1,135 @@
-var port = 8080;
-var buildURL = "https://cdn.glitch.me/1e79ce18-2755-4421-b3a3-ec98907df76f/credits.zip?v=1715460185735";
-
 var fs = require("fs");
 var path = require("path");
 var http = require("http");
 var https = require("https");
 var URL = require("url");
 var jszip = require("jszip");
+var mimeTypes = require("./mime.js");
+var publicFolder = "dist";
 
-var headers = {
-	"User-Agent":"Gvbvdxx Mod 2 - Small Static Server - Node.js"
-};
+function setNoCorsHeaders(res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
 
-function getRequest(url) {
-	var parsedURL = URL.parse(url);
-	var requestModule = null;
-	if (parsedURL.protocol == "http:") {
-		requestModule = http;
-	}
-	if (parsedURL.protocol == "https:") {
-		requestModule = https;
-	}
-	if (!requestModule) {
-		throw new Error("Unrecognized protocol for GET request "+parsedURL.protocol);
-	}
-	return new Promise((resolve, reject) => {
-		
-		var request = requestModule.request({
-			method:"GET",
-			headers: headers,
-			...parsedURL
-		},(res) => {
-			var data = [];
-			res.on("data", (chunk) => {
-				data.push(chunk);
-			});
-			res.on("end", async () => {
-				if (res.statusCode == 302) {
-					resolve(await getRequest(res.headers.location));
-				} else {
-					if (res.statusCode !== 200) {
-						reject("Response not OK. "+http.STATUS_CODES[res.statusCode.toString()]);
-					} else {
-						resolve(Buffer.concat(data));
-					}
-				}
-			});
-		});
-		request.end();
-	});
+  /*res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept"
+  );*/
 }
 
-function a() {
-  return new Promise((accept,reject) => {
-    setTimeout(accept,10);
-  });
-}  
+function runStaticStuff(req, res, otheroptions) {
+  var url = URL.parse(req.url);
+  var pathname = url.pathname;
 
-var fileTypes = {
-  svg:"image/svg+xml",
-  png:"image/png",
-  wav:"image/wav",
-  html:"text/html"  
-};
-var cache = {};
+  setNoCorsHeaders(res);
 
-(async function () {
-  var zip = null;
-  var server = http.createServer(async function (req,res) {
-    console.log(`[${req.headers['x-forwarded-for'] || req.connection.remoteAddress}]: ${req.method} ${req.url} ${req.headers["user-agent"]}`);
-    
-    if (!zip) {
-      while (!zip) {
-        await a();
+  var file = path.join(publicFolder, pathname);
+  if (file.split(".").length < 2) {
+    var _lastfile = file.toString();
+    file += ".html";
+    if (!fs.existsSync(file)) {
+      file = path.join(_lastfile, "/index.html");
+    }
+  }
+
+  if (!fs.existsSync(file)) {
+    file = "errors/404.html";
+    res.statusCode = 404;
+  }
+  if (otheroptions) {
+    if (typeof otheroptions.status == "number") {
+      file = "errors/" + otheroptions.status + ".html";
+      res.statusCode = otheroptions.status;
+    }
+  }
+
+  var extension = file.split(".").pop().toLowerCase();
+
+  var mimeType = mimeTypes[extension];
+  if (mimeType) {
+    res.setHeader("Content-Type", mimeType);
+  }
+  var fileStat = fs.statSync(file);
+  var fileLength = fileStat.size;
+
+  var range = req.headers["range"];
+  if (range) {
+    try {
+      // Parse the range manually if it ends with a dash
+      var rangeParts = range.split("=")[1].split("-");
+      var start = parseInt(rangeParts[0], 10);
+      var end = rangeParts[1] ? parseInt(rangeParts[1], 10) : fileLength - 1;
+
+      // Handle case where the end is beyond file length
+      if (end >= fileLength) {
+        end = fileLength - 1;
       }
-    }
-    
-    var url = URL.parse(req.url);
-    var pathname = url.pathname;
 
-    var file = pathname;
-    if (pathname == "/") {
-      file = "index.html";
-    }
-    if (file.split(".").length < 2) {
-      file += ".html";
-    }
-    if (file.startsWith("/")) {
-      file = file.slice(1,file.length);
-    }
-    
-    try{
-      if(!zip.files[file]) {
-        res.statusCode = 404;
-        res.end("404 NOT FOUND");
+      if (start >= fileLength || start > end) {
+        res.statusCode = 416; // Range Not Satisfiable
+        res.setHeader("Content-Range", `bytes */${fileLength}`);
+        res.end();
         return;
       }
-      var data = null
-      if (cache[file]) {
-        data = cache[file];
-      } else {
-        cache[file] = await zip.files[file].async("nodebuffer");
-        data = cache[file];
-      }
-      var type = fileTypes[file.split(".").pop().toLowerCase()];
-      if (!type) {
-        type = "text/plain";
-      }
-      res.writeHead(200,{"content-type":type});
-      res.end(data);
-    }catch(e){
-      res.statusCode = 404;
-      res.end("");
-      console.log(e);
+
+      // Set headers for partial content response
+      res.statusCode = 206; // Partial Content
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${fileLength}`);
+      res.setHeader("Content-Length", end - start + 1);
+      res.setHeader("Accept-Ranges", "bytes"); // Inform the client we support ranges
+
+      var stream = fs.createReadStream(file, { start, end });
+      stream.pipe(res);
+
+      stream.on("error", (streamErr) => {
+        if (!res.headersSent) {
+          res.statusCode = 500;
+          res.end("Internal Server Error while streaming file content.");
+        } else {
+          res.destroy();
+        }
+      });
+      return;
+    } catch (e) {
+      // Handle errors parsing the Range header
+      res.statusCode = 416; // Range Not Satisfiable
+      res.setHeader("Content-Range", `bytes */${fileLength}`);
+      res.end();
+      return;
+    }
+  }
+
+  // If no Range header is present, return the full file
+  res.setHeader("Content-Length", fileLength);
+  var stream = fs.createReadStream(file);
+  stream.pipe(res);
+
+  stream.on("error", (streamErr) => {
+    if (!res.headersSent) {
+      res.statusCode = 500;
+      res.end("Internal Server Error while streaming file content.");
+    } else {
+      res.destroy();
     }
   });
-  server.listen(port);
-  console.log("Listenening on port "+port);
-  
-  console.log("Initializing build download into memory...");
-  var data = await getRequest(buildURL);
-  console.log("Successfully downloaded into memory, unzipping into memory...");
-  zip = await jszip.loadAsync(data);
-  data = undefined;
-  console.log("Done unzipping into memory, allowing server file reading...");
-  
+}
+
+const server = http.createServer(async function (req, res) {
+  setNoCorsHeaders(res);
+
+  var ip = req.socket.remoteAddress;
+
+  var url = decodeURIComponent(req.url);
+  var urlsplit = url.split("/");
+
+  runStaticStuff(req, res);
+});
+
+var serverPort = 3000;
+if (process.env.serverPort) {
+  serverPort = Number(process.env.serverPort);
+}
+
+(async function () {
+  server.listen(serverPort);
+  console.log("Server active on http://localhost:" + serverPort);
 })();
