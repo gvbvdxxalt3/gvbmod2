@@ -1,6 +1,46 @@
-var buildURL =
-  "https://github.com/gvbvdxxalt3/gvbmod2/releases/download/1.0/GM2Latest.zip";
-var buildFolder = "dist";
+var GITHUB_OWNER = "gvbvdxxalt3";
+var GITHUB_REPO = "gvbmod2";
+var GITHUB_TOKEN = process.env.ghToken;
+var ASSET_EXTENSION = "zip"; //Must be lowercase
+
+var BUILD_FOLDER = "dist";
+
+function getLatestReleaseUrl() {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: "api.github.com",
+      path: `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`,
+      headers: {
+        "User-Agent": "Node.js",
+        Authorization: `token ${GITHUB_TOKEN}`,
+      },
+    };
+
+    https
+      .get(options, (res) => {
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => {
+          if (res.statusCode !== 200) {
+            return reject(
+              `GitHub API responded with ${res.statusCode}: ${data}`
+            );
+          }
+          const release = JSON.parse(data);
+          const asset = release.assets.find(
+            (a) => a.name.split(".").pop().toLowerCase() == ASSET_EXTENSION
+          );
+          if (!asset) {
+            return reject(
+              `Asset named "${ASSET_NAME}" not found in latest release.`
+            );
+          }
+          resolve(asset.browser_download_url);
+        });
+      })
+      .on("error", reject);
+  });
+}
 
 var fs = require("fs");
 var path = require("path");
@@ -60,17 +100,26 @@ function getRequest(url) {
 }
 
 (async function () {
+  console.log("Finding build...");
+  try {
+    var foundBuild = await getLatestReleaseUrl();
+    console.log(`Build found: ${foundBuild}`);
+  } catch (e) {
+    console.log("Error: " + e);
+    process.exit(1);
+    return;
+  }
   console.log("Downloading build...");
-  var data = await getRequest(buildURL);
+  var data = await getRequest(foundBuild);
   console.log("Loading zip file...");
   zip = await jszip.loadAsync(data);
   data = null;
   console.log("Resetting build folder...");
 
-  if (fs.existsSync(buildFolder)) {
-    fs.rmSync(buildFolder, { recursive: true, dir: true });
+  if (fs.existsSync(BUILD_FOLDER)) {
+    fs.rmSync(BUILD_FOLDER, { recursive: true, dir: true });
   }
-  fs.mkdirSync(buildFolder);
+  fs.mkdirSync(BUILD_FOLDER);
 
   console.log("Extracting zip...");
 
@@ -82,7 +131,7 @@ function getRequest(url) {
   });
 
   for (var folder of folders) {
-    var filePath = path.join(buildFolder, folder);
+    var filePath = path.join(BUILD_FOLDER, folder);
     if (!fs.existsSync(filePath)) {
       fs.mkdirSync(filePath);
     }
@@ -90,7 +139,7 @@ function getRequest(url) {
   }
 
   for (var file of files) {
-    var filePath = path.join(buildFolder, file);
+    var filePath = path.join(BUILD_FOLDER, file);
     fs.writeFileSync(filePath, await zip.files[file].async("uint8array"));
     console.log(`Write file ${filePath}`);
   }
