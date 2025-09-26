@@ -1,7 +1,5 @@
 var port = 8080;
-//var buildURL = "https://cdn.glitch.me/1e79ce18-2755-4421-b3a3-ec98907df76f/credits.zip?v=1715460185735";
-//var buildURL = //"https://randomrants-filestore-api.glitch.me/file/1218/QLOoXAlEGXHUI7tvUqpd";
-var siteFile = "QLOoXAlEGXHUI7tvUqpd";
+var buildURL = "https://cdn.glitch.me/1e79ce18-2755-4421-b3a3-ec98907df76f/credits.zip?v=1715460185735";
 
 var fs = require("fs");
 var path = require("path");
@@ -121,8 +119,7 @@ var cache = {};
   console.log("Listenening on port "+port);
   
   console.log("Initializing build download into memory...");
-  //var data = await getRequest(buildURL);
-  var data = fs.readFileSync("./"+siteFile);
+  var data = await getRequest(buildURL);
   console.log("Successfully downloaded into memory, unzipping into memory...");
   zip = await jszip.loadAsync(data);
   data = undefined;
